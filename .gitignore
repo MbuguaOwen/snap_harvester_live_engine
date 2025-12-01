@@ -1,0 +1,41 @@
+# Ignore only tick CSV files
+/data/ticks/**/*.csv
+# Ignore any renamed/parked tick files
+/data/ticks/**/*.skip
+# Ignore parquet artifacts (minutes, intermediates)
+*.parquet
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-wheel-metadata/
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+# Results: ignore everything except models
+/results/*
+!/results/models/
+!/results/models/**
+!/results/.gitkeep
+/raw/

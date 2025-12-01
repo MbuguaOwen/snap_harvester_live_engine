@@ -1,0 +1,260 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import queue
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import pandas as pd
+
+from snap_harvester.config import load_config
+from snap_harvester.logging_utils import get_logger
+from .binance_feed import BinanceBarFeed
+from .execution import BinanceExecutionClient
+from .meta_builder import LiveMetaBuilder
+from .router import LiveRouter
+from .telegram_hud import TelegramHUD
+from .trade_engine import TradeEngine
+
+
+class ShockFlipEventFeed:
+    """
+    Placeholder event feed. Upstream ShockFlip detector can push events into this queue.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue[Dict[str, Any]] = queue.Queue()
+
+    def put(self, event: Dict[str, Any]) -> None:
+        self._queue.put(event)
+
+    def get_nowait(self) -> Optional[Dict[str, Any]]:
+        try:
+            return self._queue.get_nowait()
+        except queue.Empty:
+            return None
+
+
+def _append_csv(path: Path, record: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(record.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(record)
+
+
+def _make_client_order_id(trade_id: str) -> str:
+    digest = hashlib.sha1(trade_id.encode("utf-8")).hexdigest()[:20]
+    return f"SNAP-{digest}"
+
+
+def run_live_engine(config_path: str | Path) -> None:
+    cfg = load_config(config_path)
+    logger = get_logger("live_app")
+
+    meta_builder = LiveMetaBuilder(cfg)
+    router = LiveRouter(cfg, model_path=cfg["live"]["model_path"])
+    trade_engine = TradeEngine(cfg)
+    bar_feed = BinanceBarFeed(cfg)
+    exec_client = BinanceExecutionClient(cfg)
+    hud = TelegramHUD(cfg)
+
+    data_cfg = cfg["data"]
+    risk_cfg = cfg["risk"]
+    events_log_path = Path("results/live/events.csv")
+    trades_log_path = Path("results/live/trades.csv")
+
+    # Start services
+    exec_client.ensure_connection()
+    exec_client.flatten_all_positions()
+    bar_feed.start()
+
+    event_feed = ShockFlipEventFeed()
+    safe_pause = False
+    last_health_ping = time.time()
+    binance_ok = True
+
+    logger.info("Live engine running with config=%s", config_path)
+
+    try:
+        while True:
+            # Handle ShockFlip events if any
+            ev = event_feed.get_nowait()
+            if ev is not None:
+                _handle_event(
+                    event=ev,
+                    cfg=cfg,
+                    risk_cfg=risk_cfg,
+                    meta_builder=meta_builder,
+                    router=router,
+                    trade_engine=trade_engine,
+                    exec_client=exec_client,
+                    hud=hud,
+                    events_log_path=events_log_path,
+                    safe_pause=safe_pause,
+                    max_open_trades=int(cfg.get("binance", {}).get("max_open_trades", 1)),
+                )
+
+            # Consume Binance bars
+            bar = bar_feed.get_bar(timeout=1.0)
+            if bar is not None:
+                closed = trade_engine.on_new_bar(
+                    {
+                        data_cfg.get("bars_time_col", "timestamp"): bar.timestamp,
+                        data_cfg.get("bars_high_col", "high"): bar.high,
+                        data_cfg.get("bars_low_col", "low"): bar.low,
+                        data_cfg.get("bars_close_col", "close"): bar.close,
+                    }
+                )
+                for tr in closed:
+                    hud.notify_trade_close(tr)
+                    rec = trade_engine.to_record(tr)
+                    rec["binance_symbol"] = exec_client.config.symbol
+                    _append_csv(trades_log_path, rec)
+
+            # Health checks
+            feed_stale = bar_feed.is_stale()
+            if feed_stale and not safe_pause:
+                safe_pause = True
+                hud.notify_health(
+                    status="FEED_STALE_PAUSE",
+                    details={
+                        "feed_stale": True,
+                        "binance_ok": binance_ok,
+                        "open_trades": len(trade_engine.open_trades()),
+                    },
+                )
+                logger.warning("Feed stale -> SAFE_PAUSE enabled")
+            elif safe_pause and not feed_stale:
+                safe_pause = False
+                hud.notify_health(
+                    status="RESUMED",
+                    details={
+                        "feed_stale": False,
+                        "binance_ok": binance_ok,
+                        "open_trades": len(trade_engine.open_trades()),
+                    },
+                )
+
+            now = time.time()
+            if now - last_health_ping > 60:
+                try:
+                    exec_client.ensure_connection()
+                    binance_ok = True
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.error("Binance health check failed: %s", exc)
+                    binance_ok = False
+                    safe_pause = True
+                hud.notify_health(
+                    status="HEARTBEAT",
+                    details={
+                        "feed_stale": feed_stale,
+                        "binance_ok": binance_ok,
+                        "open_trades": len(trade_engine.open_trades()),
+                    },
+                )
+                last_health_ping = now
+    except KeyboardInterrupt:
+        logger.info("Shutting down live engine")
+    finally:
+        bar_feed.stop()
+
+
+def _handle_event(
+    event: Dict[str, Any],
+    cfg: dict,
+    risk_cfg: dict,
+    meta_builder: LiveMetaBuilder,
+    router: LiveRouter,
+    trade_engine: TradeEngine,
+    exec_client: BinanceExecutionClient,
+    hud: TelegramHUD,
+    events_log_path: Path,
+    safe_pause: bool,
+    max_open_trades: int,
+) -> None:
+    logger = get_logger("live_app")
+    try:
+        meta_row = meta_builder.build_meta_row(event)
+        should_route, p_hat = router.score_and_route(meta_row)
+        hud.notify_event_decision(event, p_hat=p_hat, routed=should_route)
+
+        rec = dict(event)
+        rec.update({"p_hat": p_hat, "routed": should_route})
+        rec["event_bar_time"] = pd.to_datetime(
+            event.get("event_bar_time", event.get("timestamp")), utc=True
+        ).isoformat()
+        _append_csv(events_log_path, rec)
+
+        if not should_route:
+            return
+        if safe_pause:
+            logger.warning("SAFE_PAUSE active; skipping new trade")
+            return
+        if len(trade_engine.open_trades()) >= max_open_trades:
+            logger.warning("Max open trades reached (%d); skipping", max_open_trades)
+            return
+
+        side = int(event.get("side", 0))
+        if side not in (1, -1):
+            logger.warning("Invalid side on event: %s", side)
+            return
+        atr = float(event["atr"])
+        if atr <= 0:
+            logger.warning("Invalid ATR on event: %s", atr)
+            return
+
+        risk_unit = atr * float(risk_cfg["risk_k_atr"])
+        sl_dist = risk_unit * float(risk_cfg["sl_r_multiple"])
+        tp_dist = risk_unit * float(risk_cfg["tp_r_multiple"])
+        be_dist = risk_unit * float(risk_cfg["be_r_multiple"])
+
+        trade_id = trade_engine.make_trade_id(event)
+        client_order_id = _make_client_order_id(trade_id)
+
+        qty = exec_client.calculate_qty(
+            entry_price=float(event.get("close", event.get("price", 0.0))),
+            r_unit=risk_unit,
+            quote_risk=exec_client.config.quote_risk_per_trade,
+        )
+
+        exec_result = exec_client.submit_entry_and_brackets(
+            side=side,
+            quantity=qty,
+            sl_dist=sl_dist,
+            tp_dist=tp_dist,
+            be_dist=be_dist,
+            client_order_id=client_order_id,
+        )
+
+        trade = trade_engine.open_trade_from_live_fill(
+            event=event,
+            p_hat=p_hat,
+            fill_price=exec_result["fill_price"],
+            r_unit=risk_unit,
+            sl_price=exec_result["sl_price"],
+            be_price=exec_result["be_price"],
+            tp_price=exec_result["tp_price"],
+            meta_row=meta_row,
+        )
+        hud.notify_trade_open(trade)
+        logger.info(
+            "Opened trade %s @ %.2f (qty %.6f)",
+            trade.id,
+            trade.entry_price,
+            qty,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("Failed to process event: %s", exc)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/snap_harvester_live_btc.yaml")
+    args = parser.parse_args()
+    run_live_engine(args.config)

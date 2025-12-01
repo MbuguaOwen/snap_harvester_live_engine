@@ -1,0 +1,102 @@
+experiment:
+  name: snap_harvester_live_btc
+  seed: 42
+
+data:
+  symbols:
+    - "BTCUSDT"
+
+  # Historical minutes for replay / warmup.
+  bars_path_template: "data/minutes/{symbol}_1min.parquet"
+  bars_time_col: "timestamp"
+  bars_open_col: "open"
+  bars_high_col: "high"
+  bars_low_col: "low"
+  bars_close_col: "close"
+  bars_volume_col: "volume"
+
+  # ShockFlip meta events (same schema as existing 2025 study).
+  events_path: "results/meta/snap_meta_events_2025_BTC_JanJul.csv"
+  events_time_col: "timestamp"
+
+integrity:
+  price_tolerance: 1e-4
+  event_snap_minutes: 1
+  drop_misaligned_events: true
+  log_misaligned_events: true
+  max_risk_to_price_ratio: 5.0
+
+# Risk block identical to snap_harvester_2024_btc.yaml
+risk:
+  risk_k_atr: 0.5
+  sl_r_multiple: 2.5
+  tp_r_multiple: 4.0
+  be_r_multiple: 1.0
+  be_k_atr: 0.0
+  tp_k_atr: 0.0
+  horizon_bars: 30
+  target_r_multiple: 4.0
+
+meta:
+  label_col: "y_swing_1p5"
+  r_multiple_col: "r_final"
+  mfe_col: "mfe_r"
+  mae_col: "mae_r"
+  exclude_feature_cols:
+    - "event_id"
+    - "event_bar_time"
+    - "event_bar_offset_min"
+    - "exit_time"
+    - "hit_be"
+    - "hit_tp"
+    - "hit_sl"
+    - "p_hat"
+    - "risk_profile"
+  max_category_cardinality: 20
+
+paths:
+  replay_trades_out: "results/live/replay_routed_tape_2025_BTC.csv"
+
+live:
+  # Frozen 2024 BTC meta-model
+  model_path: "results/models/hgb_snap_2024_BTC.joblib"
+
+  # If use_ml_routing=false, all ShockFlips are routed with the strategy profile.
+  use_ml_routing: false
+  min_p_hat: 0.5
+
+  # Execution / alerts are configured via the binance:/telegram: blocks below.
+
+binance:
+  symbol: "BTCUSDT"
+  base_url: "https://fapi.binance.com"
+  ws_url: "wss://fstream.binance.com/ws"
+  api_key_env: "BINANCE_API_KEY"
+  api_secret_env: "BINANCE_API_SECRET"
+  recv_window_ms: 5000
+  testnet: false
+
+  # Feed / safety
+  use_kline_stream: true
+  kline_interval: "1m"
+  heartbeat_sec: 5
+  stale_timeout_sec: 30
+
+  # Execution
+  use_oco_brackets: true
+  max_retries: 3
+  order_timeout_sec: 5
+  quote_risk_per_trade: 50.0
+  max_open_trades: 1
+
+telegram:
+  enabled: true
+  bot_token_env: "TELEGRAM_BOT_TOKEN"
+  chat_id_env: "TELEGRAM_CHAT_ID"
+
+  # Noise control
+  send_events: false
+  send_trade_open: true
+  send_trade_close: true
+  send_health: true
+  daily_summary_hour_utc: 21
