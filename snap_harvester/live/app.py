@@ -5,6 +5,7 @@ import csv
 import hashlib
 import queue
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -53,7 +54,7 @@ def _make_client_order_id(trade_id: str) -> str:
     return f"SNAP-{digest}"
 
 
-def run_live_engine(config_path: str | Path) -> None:
+def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | None = None) -> ShockFlipEventFeed:
     cfg = load_config(config_path)
     logger = get_logger("live_app")
 
@@ -74,7 +75,7 @@ def run_live_engine(config_path: str | Path) -> None:
     exec_client.flatten_all_positions()
     bar_feed.start()
 
-    event_feed = ShockFlipEventFeed()
+    event_feed = event_feed or ShockFlipEventFeed()
     safe_pause = False
     last_health_ping = time.time()
     binance_ok = True
@@ -163,6 +164,7 @@ def run_live_engine(config_path: str | Path) -> None:
         logger.info("Shutting down live engine")
     finally:
         bar_feed.stop()
+    return event_feed
 
 
 def _handle_event(
@@ -179,6 +181,7 @@ def _handle_event(
     max_open_trades: int,
 ) -> None:
     logger = get_logger("live_app")
+    decision_ts = time.time()
     try:
         meta_row = meta_builder.build_meta_row(event)
         should_route, p_hat = router.score_and_route(meta_row)
@@ -189,6 +192,7 @@ def _handle_event(
         rec["event_bar_time"] = pd.to_datetime(
             event.get("event_bar_time", event.get("timestamp")), utc=True
         ).isoformat()
+        rec["decision_ts"] = datetime.fromtimestamp(decision_ts, tz=timezone.utc).isoformat()
         _append_csv(events_log_path, rec)
 
         if not should_route:
@@ -200,7 +204,23 @@ def _handle_event(
             logger.warning("Max open trades reached (%d); skipping", max_open_trades)
             return
 
-        side = int(event.get("side", 0))
+        raw_side = event.get("side", 0)
+        if isinstance(raw_side, str):
+            s = raw_side.strip().upper()
+            if s in ("BUY", "LONG", "+1", "1"):
+                side = 1
+            elif s in ("SELL", "SHORT", "-1"):
+                side = -1
+            else:
+                logger.warning("Invalid side on event: %s", raw_side)
+                return
+        else:
+            try:
+                side = int(raw_side)
+            except (TypeError, ValueError):
+                logger.warning("Invalid side on event: %s", raw_side)
+                return
+
         if side not in (1, -1):
             logger.warning("Invalid side on event: %s", side)
             return
@@ -231,6 +251,13 @@ def _handle_event(
             be_dist=be_dist,
             client_order_id=client_order_id,
         )
+        fill_ts = time.time()
+        decision_price = float(event.get("close", event.get("price", 0.0)))
+        slippage_raw = exec_result["fill_price"] - decision_price
+        slippage_bps = (slippage_raw / decision_price) * 10_000 if decision_price else 0.0
+        dir_sign = 1 if side > 0 else -1
+        slippage_r = (slippage_raw * dir_sign) / max(risk_unit, 1e-8)
+        event_to_fill_ms = (fill_ts - decision_ts) * 1000.0
 
         trade = trade_engine.open_trade_from_live_fill(
             event=event,
@@ -243,6 +270,20 @@ def _handle_event(
             meta_row=meta_row,
         )
         hud.notify_trade_open(trade)
+        open_rec = trade_engine.to_record(trade)
+        open_rec.update(
+            {
+                "decision_price": decision_price,
+                "fill_price": exec_result["fill_price"],
+                "slippage_bps": slippage_bps,
+                "slippage_r": slippage_r,
+                "event_to_fill_ms": event_to_fill_ms,
+                "decision_ts": datetime.fromtimestamp(decision_ts, tz=timezone.utc).isoformat(),
+                "fill_ts": datetime.fromtimestamp(fill_ts, tz=timezone.utc).isoformat(),
+                "client_order_id": client_order_id,
+            }
+        )
+        _append_csv(events_log_path.parent / "trades.csv", open_rec)
         logger.info(
             "Opened trade %s @ %.2f (qty %.6f)",
             trade.id,

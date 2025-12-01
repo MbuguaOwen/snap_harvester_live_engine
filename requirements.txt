@@ -4,5 +4,5 @@ pandas
 PyYAML
 requests
 scikit-learn
-python-binance
+binance-futures-connector
 websockets

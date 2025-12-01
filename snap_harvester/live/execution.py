@@ -81,12 +81,24 @@ class BinanceExecutionClient:
         raise RuntimeError("Binance connectivity failed")
 
     def _get_symbol_filters(self) -> Dict[str, Any]:
+        """
+        Fetch and cache the exchange filters for our symbol.
+
+        Binance UM futures `exchangeInfo` does NOT take a `symbol` parameter.
+        We call it without args and filter client-side. Some connector versions
+        wrap the payload under "data", so handle both shapes.
+        """
         if self._exchange_filters is not None:
             return self._exchange_filters
-        info = self.client.exchange_info(symbol=self.config.symbol)
-        symbol_info = next((s for s in info.get("symbols", []) if s.get("symbol") == self.config.symbol), None)
+
+        info = self.client.exchange_info()
+        payload = info.get("data", info)
+
+        symbols = payload.get("symbols", [])
+        symbol_info = next((s for s in symbols if s.get("symbol") == self.config.symbol), None)
         if not symbol_info:
             raise RuntimeError(f"Exchange info missing symbol={self.config.symbol}")
+
         filters = {f["filterType"]: f for f in symbol_info.get("filters", [])}
         self._exchange_filters = filters
         return filters
@@ -210,7 +222,7 @@ class BinanceExecutionClient:
 
     def _get_order_by_client_id(self, client_order_id: str) -> Optional[Dict[str, Any]]:
         try:
-            order = self.client.get_order(
+            order = self.client.query_order(
                 symbol=self.config.symbol,
                 origClientOrderId=client_order_id,
                 recvWindow=self.config.recv_window_ms,
@@ -220,7 +232,7 @@ class BinanceExecutionClient:
             return None
 
     def _get_order_by_id(self, order_id: int) -> Dict[str, Any]:
-        return self.client.get_order(
+        return self.client.query_order(
             symbol=self.config.symbol,
             orderId=order_id,
             recvWindow=self.config.recv_window_ms,
@@ -234,7 +246,7 @@ class BinanceExecutionClient:
                 if order_id is not None:
                     last = self._get_order_by_id(order_id)
                 else:
-                    last = self.client.get_order(
+                    last = self.client.query_order(
                         symbol=self.config.symbol,
                         origClientOrderId=client_order_id,
                         recvWindow=self.config.recv_window_ms,

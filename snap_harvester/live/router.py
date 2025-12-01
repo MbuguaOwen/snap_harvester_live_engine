@@ -28,8 +28,17 @@ class LiveRouter:
     def __init__(self, cfg: dict, model_path: str | Path) -> None:
         self.cfg = cfg
         live_cfg = cfg.get("live", {})
+        rr_cfg = cfg.get("risk_routing", {})
+        default_profile = rr_cfg.get("default_profile")
+        default_min_p = None
+        try:
+            profile_routes = rr_cfg.get("profiles", {}).get(default_profile or "", {}).get("routes", {})
+            default_min_p = float(profile_routes.get("R10", {}).get("min_p"))
+        except (TypeError, ValueError):
+            default_min_p = None
+
         self.router_cfg = RouterConfig(
-            min_p_hat=float(live_cfg.get("min_p_hat", 0.0)),
+            min_p_hat=float(live_cfg.get("min_p_hat", default_min_p if default_min_p is not None else 0.0)),
             use_ml_routing=bool(live_cfg.get("use_ml_routing", False)),
         )
         self.model_path = Path(model_path)

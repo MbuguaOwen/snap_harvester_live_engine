@@ -9,7 +9,11 @@ import pandas as pd
 
 from snap_harvester.config import load_config
 from snap_harvester.logging_utils import get_logger
-from .feed import ReplayBarFeed, ReplayEventFeed
+from snap_harvester.archive.integrity import (
+    align_events_to_bars,
+    validate_risk_price_scale,
+)
+from .feed import ReplayBarFeed
 from .meta_builder import LiveMetaBuilder
 from .router import LiveRouter
 from .trade_engine import TradeEngine
@@ -56,7 +60,52 @@ def run_replay(cfg_path: str | Path) -> None:
         close_col=data_cfg.get("bars_close_col", "close"),
         volume_col=data_cfg.get("bars_volume_col", "volume"),
     )
-    event_feed = ReplayEventFeed(path=events_path, time_col=data_cfg.get("events_time_col", "timestamp"))
+    bars_df = bar_feed.df.copy()
+    bars_time_col = data_cfg.get("bars_time_col", "timestamp")
+    bars_high_col = data_cfg.get("bars_high_col", "high")
+    bars_low_col = data_cfg.get("bars_low_col", "low")
+    bars_close_col = data_cfg.get("bars_close_col", "close")
+    bars_df[bars_time_col] = pd.to_datetime(bars_df[bars_time_col], utc=True, errors="coerce")
+    bars_by_symbol = {symbol: bars_df}
+
+    # Load and align events like research
+    events_raw = pd.read_csv(events_path)
+    events_time_col = data_cfg.get("events_time_col", "timestamp")
+    events_price_col = data_cfg.get("events_price_col", "close")
+    events_atr_col = data_cfg.get("events_atr_col", "atr")
+    events_sym_col = data_cfg.get("events_symbol_col", "symbol")
+    events_side_col = data_cfg.get("events_side_col", "side")
+    events_raw = events_raw[events_raw[events_sym_col].astype(str).str.upper() == str(symbol).upper()].copy()
+    events_raw[events_time_col] = pd.to_datetime(events_raw[events_time_col], utc=True, errors="coerce")
+
+    integrity_cfg = cfg.get("integrity", {})
+    aligned_events = align_events_to_bars(
+        events=events_raw,
+        bars_by_symbol=bars_by_symbol,
+        time_col=events_time_col,
+        sym_col=events_sym_col,
+        price_col=events_price_col,
+        bars_time_col=bars_time_col,
+        bars_low_col=bars_low_col,
+        bars_high_col=bars_high_col,
+        tolerance=float(integrity_cfg.get("price_tolerance", 1e-6)),
+        max_snap_minutes=int(integrity_cfg.get("event_snap_minutes", 1)),
+        drop_outside=bool(integrity_cfg.get("drop_misaligned_events", False)),
+        logger=logger,
+    )
+    validate_risk_price_scale(
+        aligned_events,
+        price_col=events_price_col,
+        atr_col=events_atr_col,
+        risk_k_atr=float(cfg["risk"]["risk_k_atr"]),
+        max_risk_to_price_ratio=float(integrity_cfg.get("max_risk_to_price_ratio", 10.0)),
+    )
+    aligned_events = aligned_events.sort_values(events_time_col).reset_index(drop=True)
+    aligned_events["idx"] = aligned_events.index.astype(int)
+    aligned_events["event_id"] = [
+        f"{row[events_sym_col]}-{pd.to_datetime(row[events_time_col]).isoformat()}-{i}"
+        for i, row in aligned_events.iterrows()
+    ]
 
     meta_builder = LiveMetaBuilder(cfg)
     router = LiveRouter(cfg, model_path=model_path)
@@ -64,9 +113,9 @@ def run_replay(cfg_path: str | Path) -> None:
 
     # Group events by bar timestamp for efficient lookup
     events_by_ts: Dict[pd.Timestamp, List[Dict[str, Any]]] = {}
-    for ev in event_feed:
-        ts = pd.to_datetime(ev.get("event_bar_time", ev.get("timestamp")), utc=True)
-        events_by_ts.setdefault(ts, []).append(ev)
+    for _, ev in aligned_events.iterrows():
+        ts = pd.to_datetime(ev.get("event_bar_time", ev.get(events_time_col)), utc=True)
+        events_by_ts.setdefault(ts, []).append(ev.to_dict())
 
     records: List[Dict[str, Any]] = []
 

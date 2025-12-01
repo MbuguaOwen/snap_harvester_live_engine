@@ -12,6 +12,7 @@ TradeStatus = Literal["open", "be_locked", "closed"]
 @dataclass
 class Trade:
     id: str
+    event_id: str
     symbol: str
     direction: int  # +1 long, -1 short
     entry_ts: pd.Timestamp
@@ -33,6 +34,7 @@ class Trade:
     exit_ts: Optional[pd.Timestamp] = None
     p_hat: Optional[float] = None
     meta: Optional[Dict[str, Any]] = None
+    risk_profile: Optional[str] = None
 
 
 class TradeEngine:
@@ -112,9 +114,11 @@ class TradeEngine:
 
         r_unit = risk_dist
         trade_id = self._make_trade_id(event)
+        event_id = str(event.get("event_id", trade_id))
 
         trade = Trade(
             id=trade_id,
+            event_id=event_id,
             symbol=str(event.get("symbol", "BTCUSDT")),
             direction=dir_sign,
             entry_ts=entry_ts,
@@ -127,6 +131,7 @@ class TradeEngine:
             horizon_bars=self.horizon,
             p_hat=p_hat,
             meta=meta_row,
+            risk_profile=event.get("risk_profile"),
         )
         self._trades[trade_id] = trade
         return trade
@@ -161,9 +166,11 @@ class TradeEngine:
         dir_sign = 1 if side > 0 else -1
         entry_ts = pd.to_datetime(event.get("event_bar_time", event.get("timestamp")), utc=True)
         trade_id = self._make_trade_id(event)
+        event_id = str(event.get("event_id", trade_id))
 
         trade = Trade(
             id=trade_id,
+            event_id=event_id,
             symbol=str(event.get("symbol", "BTCUSDT")),
             direction=dir_sign,
             entry_ts=entry_ts,
@@ -176,6 +183,7 @@ class TradeEngine:
             horizon_bars=self.horizon,
             p_hat=p_hat,
             meta=meta_row,
+            risk_profile=event.get("risk_profile"),
         )
         self._trades[trade_id] = trade
         return trade

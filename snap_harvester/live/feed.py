@@ -81,7 +81,7 @@ class ReplayEventFeed:
     - all feature columns used by the 2024 BTC meta-model
     """
 
-    def __init__(self, path: str | Path, time_col: str = "timestamp") -> None:
+    def __init__(self, path: str | Path, time_col: str = "timestamp", symbols: list[str] | None = None) -> None:
         p = Path(path)
         if p.suffix == ".parquet":
             df = pd.read_parquet(p)
@@ -92,8 +92,19 @@ class ReplayEventFeed:
 
         # Normalize timestamp
         df[time_col] = pd.to_datetime(df[time_col], utc=True, errors="coerce")
+        if symbols:
+            sym_col = "symbol" if "symbol" in df.columns else None
+            if sym_col:
+                df = df[df[sym_col].isin(symbols)].copy()
         self.time_col = time_col
-        self.df = df.sort_values(time_col).reset_index(drop=True)
+        df = df.sort_values(time_col).reset_index(drop=True)
+        # Re-sequence idx/event_id deterministically to match research numbering
+        df["idx"] = df.index.astype(int)
+        sym_series = df.get("symbol", "BTCUSDT").astype(str)
+        df["event_id"] = [
+            f"{sym}-{ts.isoformat()}-{i}" for i, (sym, ts) in enumerate(zip(sym_series, df[time_col]))
+        ]
+        self.df = df
 
     def __iter__(self) -> Iterator[Event]:
         for _, row in self.df.iterrows():

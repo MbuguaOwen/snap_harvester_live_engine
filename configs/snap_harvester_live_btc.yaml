@@ -28,9 +28,10 @@ integrity:
 
 # Risk block identical to snap_harvester_2024_btc.yaml
 risk:
+  # Research risk geometry (archive default): R = 0.5*ATR, SL = 2.5R, TP = 4R
   risk_k_atr: 0.5
-  sl_r_multiple: 2.5
-  tp_r_multiple: 4.0
+  sl_r_multiple: 0.5
+  tp_r_multiple: 3.0
   be_r_multiple: 1.0
   be_k_atr: 0.0
   tp_k_atr: 0.0
@@ -62,25 +63,27 @@ live:
   model_path: "results/models/hgb_snap_2024_BTC.joblib"
 
   # If use_ml_routing=false, all ShockFlips are routed with the strategy profile.
-  use_ml_routing: false
+  use_ml_routing: true
   min_p_hat: 0.5
 
   # Execution / alerts are configured via the binance:/telegram: blocks below.
 
 binance:
   symbol: "BTCUSDT"
-  base_url: "https://fapi.binance.com"
-  ws_url: "wss://fstream.binance.com/ws"
+  # USDT-M Futures TESTNET (demo)
+  base_url: "https://demo-fapi.binance.com"
+  ws_url: "wss://fstream.binancefuture.com/ws"
   api_key_env: "BINANCE_API_KEY"
   api_secret_env: "BINANCE_API_SECRET"
   recv_window_ms: 5000
-  testnet: false
+  testnet: true
 
   # Feed / safety
   use_kline_stream: true
   kline_interval: "1m"
-  heartbeat_sec: 5
-  stale_timeout_sec: 30
+  heartbeat_sec: 30
+  stale_timeout_sec: 120
+  backfill_bars: 240
 
   # Execution
   use_oco_brackets: true

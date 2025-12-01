@@ -29,6 +29,7 @@ class LiveMetaBuilder:
         - Preserve all numeric feature columns as-is.
         - Ensure 'event_bar_time' exists and is a UTC timestamp.
         - Ensure 'event_bar_offset_min' exists (0 for aligned events).
+        - Ensure 'event_id' exists for downstream parity checks.
         """
         row = dict(event)
 
@@ -40,5 +41,11 @@ class LiveMetaBuilder:
         # Event-bar offset in minutes (0 for live / already aligned events)
         if "event_bar_offset_min" not in row or pd.isna(row["event_bar_offset_min"]):
             row["event_bar_offset_min"] = 0
+
+        # Event id is required for parity joins; fall back to a deterministic value.
+        if not row.get("event_id"):
+            sym = row.get("symbol", "BTCUSDT")
+            idx = row.get("idx", 0)
+            row["event_id"] = f"{sym}-{ts.isoformat()}-{idx}"
 
         return row
