@@ -71,8 +71,8 @@ live:
 binance:
   symbol: "BTCUSDT"
   # USDT-M Futures TESTNET (demo)
-  base_url: "https://demo-fapi.binance.com"
-  ws_url: "wss://fstream.binancefuture.com/ws"
+  base_url: "https://testnet.binancefuture.com"
+  ws_url: "wss://stream.binancefuture.com/ws"
   api_key_env: "BINANCE_API_KEY"
   api_secret_env: "BINANCE_API_SECRET"
   recv_window_ms: 5000
