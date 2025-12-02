@@ -25,20 +25,23 @@ python -m snap_harvester.live.runner --config configs/snap_harvester_live_btc.ya
 ```
 Uses the configured bars/events paths, applies the frozen model, and writes a routed tape to `paths.replay_trades_out`.
 
-## Live mode
-1) Export env vars above.
-2) Optional: set `binance.testnet: true` and point `base_url/ws_url` at Binance testnet.
-3) Run:
+Parity checks:
+```
+python scripts/compare_replay_parity.py --research results/meta/snap_routed_tape_2025_BTC.csv --epsilon 1e-6
+python scripts/router_parity_check.py --config configs/snap_harvester_live_btc.yaml
+```
+
+## Live mode (canonical)
+Single supported entrypoint (ShockFlip detector + Binance aggTrade WS wired in):
 ```
 python -m snap_harvester.live.app --config configs/snap_harvester_live_btc.yaml
 ```
 Components:
+- `ShockFlipDetector` uses the research feature stack (`core.features` / `core.shockflip_detector`) and builds 1m bars via `core.data_loader.resample_ticks_to_bars`.
 - `BinanceBarFeed`: 1m futures klines via websocket; REST backfill on reconnect; stale detection (no new entries when stale).
 - `BinanceExecutionClient`: market entry + exchange-hosted SL/TP brackets (STOP/TAKE_PROFIT market), deterministic `clientOrderId`, restart flatten helper.
 - `TelegramHUD`: concise HUD messages (health, opens/closes; event decisions optional).
 - `TradeEngine`: barrier logic; live path uses `open_trade_from_live_fill` so SL/TP use actual fills.
-
-ShockFlip events should be pushed into the `ShockFlipEventFeed` stub (queue-driven) by the upstream detector; only routed/high-signal events should reach the orchestrator.
 
 ## Safety rails
 - Idempotent client order IDs and lookup before re-sending.

@@ -15,6 +15,7 @@ from snap_harvester.config import load_config
 from snap_harvester.logging_utils import get_logger
 from .binance_feed import BinanceBarFeed
 from .execution import BinanceExecutionClient
+from .shockflip_live import ShockFlipDetector, Tick
 from .meta_builder import LiveMetaBuilder
 from .router import LiveRouter
 from .telegram_hud import TelegramHUD
@@ -23,7 +24,7 @@ from .trade_engine import TradeEngine
 
 class ShockFlipEventFeed:
     """
-    Placeholder event feed. Upstream ShockFlip detector can push events into this queue.
+    ShockFlip event feed. Upstream ShockFlip detector pushes events into this queue.
     """
 
     def __init__(self) -> None:
@@ -75,7 +76,7 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
     exec_client.flatten_all_positions()
     bar_feed.start()
 
-    event_feed = event_feed or ShockFlipEventFeed()
+    event_feed = event_feed or _start_shockflip_pipeline(cfg, logger)
     safe_pause = False
     last_health_ping = time.time()
     binance_ok = True
@@ -164,6 +165,44 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
         logger.info("Shutting down live engine")
     finally:
         bar_feed.stop()
+    return event_feed
+
+
+def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
+    """
+    Start ShockFlipDetector + Binance aggTrade websocket and return the shared event feed.
+    """
+    from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient  # type: ignore
+
+    symbol = cfg.get("binance", {}).get("symbol", "BTCUSDT")
+    detector = ShockFlipDetector(symbol=symbol)
+    event_feed = ShockFlipEventFeed()
+    tick_count = 0
+
+    def handle_aggtrade(_, msg: Dict[str, Any]) -> None:
+        nonlocal tick_count
+        try:
+            tick = Tick(
+                timestamp=int(msg.get("T") or msg.get("E")),
+                price=float(msg["p"]),
+                qty=float(msg["q"]),
+                is_buyer_maker=bool(msg["m"]),
+            )
+        except Exception:
+            return
+
+        tick_count += 1
+        if tick_count % 100 == 0:
+            logger.info("[WS] received %d aggTrades", tick_count)
+
+        ev = detector.update(tick)
+        if ev is not None:
+            logger.info("ShockFlip LIVE event: %s", ev)
+            event_feed.put(ev)
+
+    ws = UMFuturesWebsocketClient(on_message=handle_aggtrade)
+    ws.agg_trade(symbol=symbol.lower())
+    logger.info("Started ShockFlip detector websocket for %s", symbol)
     return event_feed
 
 
