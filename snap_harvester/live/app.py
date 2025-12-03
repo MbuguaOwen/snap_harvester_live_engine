@@ -21,6 +21,9 @@ from .router import LiveRouter
 from .telegram_hud import TelegramHUD
 from .trade_engine import TradeEngine
 
+# ShockFlipConfig comes from the research stack (made importable via shockflip_live.py)
+from core.shockflip_detector import ShockFlipConfig  # type: ignore
+
 
 class ShockFlipEventFeed:
     """
@@ -175,7 +178,25 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
     from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient  # type: ignore
 
     symbol = cfg.get("binance", {}).get("symbol", "BTCUSDT")
-    detector = ShockFlipDetector(symbol=symbol)
+
+    # Live ShockFlip geometry aligned with proven Nov 2025 OOS walkforward
+    sf_cfg_raw = cfg.get("shockflip", {})
+    sf_cfg = ShockFlipConfig(
+        source="imbalance",
+        z_window=int(sf_cfg_raw.get("z_window", 90)),
+        z_band=float(sf_cfg_raw.get("z_band", 1.2)),
+        jump_band=float(sf_cfg_raw.get("jump_band", 1.5)),
+        persistence_bars=int(sf_cfg_raw.get("persistence_bars", 1)),
+        persistence_ratio=0.5,
+        dynamic_thresholds={"enabled": False},
+        location_filter={
+            "donchian_window": int(sf_cfg_raw.get("donchian_window", 40)),
+            "require_extreme": True,
+        },
+    )
+    min_bars = int(sf_cfg_raw.get("min_bars", 60))
+
+    detector = ShockFlipDetector(symbol=symbol, cfg=sf_cfg, min_bars=min_bars)
     event_feed = ShockFlipEventFeed()
     tick_count = 0
 

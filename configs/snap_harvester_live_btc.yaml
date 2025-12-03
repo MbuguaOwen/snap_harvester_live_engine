@@ -58,6 +58,15 @@ meta:
 paths:
   replay_trades_out: "results/live/replay_routed_tape_2025_BTC.csv"
 
+# Live ShockFlip geometry aligned with Nov 2025 OOS walkforward
+shockflip:
+  z_band: 1.2
+  jump_band: 1.5
+  persistence_bars: 1
+  z_window: 90
+  donchian_window: 40
+  min_bars: 60
+
 live:
   # Frozen 2024 BTC meta-model
   model_path: "results/models/hgb_snap_2024_BTC.joblib"

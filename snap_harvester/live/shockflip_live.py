@@ -37,9 +37,15 @@ class ShockFlipDetector:
     - Runs core.shockflip_detector.detect_shockflip_signals with the canonical ShockFlipConfig.
     """
 
-    def __init__(self, symbol: str, cfg: ShockFlipConfig | None = None) -> None:
+    def __init__(
+        self,
+        symbol: str,
+        cfg: ShockFlipConfig | None = None,
+        min_bars: int = 240,
+    ) -> None:
         self.symbol = symbol
         self.cfg = cfg or ShockFlipConfig()
+        self.min_bars = int(min_bars)
 
         self._ticks: List[Dict[str, Any]] = []
         self._current_minute: Optional[int] = None
@@ -82,8 +88,18 @@ class ShockFlipDetector:
         # Keep a rolling window to limit memory
         self._bars = bars.tail(1000).reset_index(drop=True)
 
-        # Apply research feature stack
-        feat = add_core_features(self._bars, z_window=self.cfg.z_window, atr_window=60, donchian_window=120)
+        # Require a minimum history window before attempting detection
+        if len(self._bars) < max(self.min_bars, 1):
+            return None
+
+        # Apply research feature stack with live ShockFlipConfig geometry
+        donchian_window = int(self.cfg.location_filter.get("donchian_window", 120))
+        feat = add_core_features(
+            self._bars,
+            z_window=self.cfg.z_window,
+            atr_window=60,
+            donchian_window=donchian_window,
+        )
         feat = add_hypothesis_features(feat, prior_flow_window=60, div_window=60, atr_pct_window=5000)
         feat = detect_shockflip_signals(feat, self.cfg)
         if feat.empty or len(feat) < max(10, self.cfg.z_window // 4):
