@@ -60,6 +60,8 @@ def _aggregate_file(
     logger,
     chunksize: int = 5_000_000,
     tick_size: float | None = None,
+    min_ts: pd.Timestamp | None = None,
+    max_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
     """Stream and aggregate one tick CSV into minute bars."""
     usecols, dtype_map, rename_map = _detect_usecols(path)
@@ -72,6 +74,7 @@ def _aggregate_file(
         dtype=dtype_map,
         low_memory=False,
         chunksize=chunksize,
+        on_bad_lines="skip",  # drop malformed rows / wrong column count
     ):
         if chunk.empty:
             continue
@@ -121,6 +124,16 @@ def _aggregate_file(
         chunk = chunk.dropna(subset=["timestamp", "price"])
         chunk = chunk.sort_values("timestamp")
 
+        # Drop absurd timestamps outside the user-provided bounds
+        if min_ts is not None or max_ts is not None:
+            ts = chunk["timestamp"]
+            if min_ts is not None:
+                chunk = chunk.loc[ts >= min_ts]
+            if max_ts is not None:
+                chunk = chunk.loc[ts <= max_ts]
+            if chunk.empty:
+                continue
+
         dedup_subset = [c for c in ["timestamp", "price", "qty", "is_buyer_maker"] if c in chunk.columns]
         if tick_size is not None and "tick" in chunk.columns:
             dedup_subset.append("tick")
@@ -163,6 +176,8 @@ def build_minutes_from_paths(
     max_gap_seconds: float,
     logger,
     tick_size: float | None = None,
+    min_ts: pd.Timestamp | None = None,
+    max_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
     if not paths:
         raise FileNotFoundError("No tick files matched the provided glob")
@@ -170,7 +185,16 @@ def build_minutes_from_paths(
     frames = []
     for p in tqdm(paths, desc="Aggregating tick files"):
         try:
-            frames.append(_aggregate_file(p, unit, logger=logger, tick_size=tick_size))
+            frames.append(
+                _aggregate_file(
+                    p,
+                    unit,
+                    logger=logger,
+                    tick_size=tick_size,
+                    min_ts=min_ts,
+                    max_ts=max_ts,
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Failed while processing tick file {p}") from exc
 
@@ -251,6 +275,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override tick size (default: look up from symbol).",
     )
+    parser.add_argument(
+        "--min_timestamp",
+        type=str,
+        default="2020-01-01",
+        help="Drop ticks earlier than this UTC datetime (default: 2020-01-01).",
+    )
+    parser.add_argument(
+        "--max_timestamp",
+        type=str,
+        default="2026-01-01",
+        help="Drop ticks later than this UTC datetime (default: 2026-01-01).",
+    )
     return parser.parse_args()
 
 
@@ -278,6 +314,9 @@ def main() -> None:
 
     logger.info("Using tick size %.10g for %s", tick_size, args.symbol)
 
+    min_ts = pd.to_datetime(args.min_timestamp, utc=True) if args.min_timestamp else None
+    max_ts = pd.to_datetime(args.max_timestamp, utc=True) if args.max_timestamp else None
+
     ohlc = build_minutes_from_paths(
         tick_paths,
         unit=ts_unit,
@@ -285,6 +324,8 @@ def main() -> None:
         max_gap_seconds=args.max_gap_seconds,
         logger=logger,
         tick_size=tick_size,
+        min_ts=min_ts,
+        max_ts=max_ts,
     )
 
     out_path = Path(args.out)
