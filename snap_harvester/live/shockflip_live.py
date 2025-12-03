@@ -8,10 +8,13 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-# Make research stack importable
-RESEARCH_ROOT = Path(__file__).resolve().parents[2] / "shockflip_snap_harvester_v2"
-if str(RESEARCH_ROOT) not in sys.path:
-    sys.path.insert(0, str(RESEARCH_ROOT))
+# Make research stack importable. Support both the plain repo name and the
+# current workspace folder name ("shockflip_snap_harvester_v2 - Research").
+ROOT = Path(__file__).resolve().parents[2]
+for candidate in ("shockflip_snap_harvester_v2", "shockflip_snap_harvester_v2 - Research"):
+    research_root = ROOT / candidate
+    if research_root.is_dir() and str(research_root) not in sys.path:
+        sys.path.insert(0, str(research_root))
 
 from core.data_loader import resample_ticks_to_bars  # type: ignore
 from core.features import add_core_features, add_hypothesis_features  # type: ignore
