@@ -181,6 +181,8 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
 
     # Live ShockFlip geometry aligned with proven Nov 2025 OOS walkforward
     sf_cfg_raw = cfg.get("shockflip", {})
+    location_require_extreme = bool(sf_cfg_raw.get("location_require_extreme", True))
+    dynamic_thresholds = sf_cfg_raw.get("dynamic_thresholds", {"enabled": False}) or {"enabled": False}
     sf_cfg = ShockFlipConfig(
         source="imbalance",
         z_window=int(sf_cfg_raw.get("z_window", 90)),
@@ -188,10 +190,10 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
         jump_band=float(sf_cfg_raw.get("jump_band", 1.5)),
         persistence_bars=int(sf_cfg_raw.get("persistence_bars", 1)),
         persistence_ratio=0.5,
-        dynamic_thresholds={"enabled": False},
+        dynamic_thresholds=dynamic_thresholds,
         location_filter={
             "donchian_window": int(sf_cfg_raw.get("donchian_window", 40)),
-            "require_extreme": True,
+            "require_extreme": location_require_extreme,
         },
     )
     min_bars = int(sf_cfg_raw.get("min_bars", 60))

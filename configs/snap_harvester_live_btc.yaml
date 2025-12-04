@@ -6,7 +6,7 @@ data:
   symbols:
     - "BTCUSDT"
 
-  # Historical minutes for replay / warmup.
+  # Historical minutes for replay / warmup (aggTrades v2 bars).
   bars_path_template: "data/minutes/{symbol}_1min.parquet"
   bars_time_col: "timestamp"
   bars_open_col: "open"
@@ -15,8 +15,8 @@ data:
   bars_close_col: "close"
   bars_volume_col: "volume"
 
-  # ShockFlip meta events (same schema as existing 2025 study).
-  events_path: "results/meta/snap_meta_events_2025_BTC_JanJul.csv"
+  # ShockFlip meta events (research-parity aggTrades set).
+  events_path: "results/meta/snap_meta_dataset_2025_BTC_agg.csv"
   events_time_col: "timestamp"
 
 integrity:
@@ -28,10 +28,9 @@ integrity:
 
 # Risk block identical to snap_harvester_2024_btc.yaml
 risk:
-  # Research risk geometry (archive default): R = 0.5*ATR, SL = 2.5R, TP = 4R
   risk_k_atr: 0.5
-  sl_r_multiple: 0.5
-  tp_r_multiple: 3.0
+  sl_r_multiple: 2.5
+  tp_r_multiple: 4.0
   be_r_multiple: 1.0
   be_k_atr: 0.0
   tp_k_atr: 0.0
@@ -39,7 +38,8 @@ risk:
   target_r_multiple: 4.0
 
 meta:
-  label_col: "y_swing_1p5"
+  label_col: "y_win_R4_SL2p5"
+  barrier_col: "barrier_y_H30_R4p0_sl2p5"
   r_multiple_col: "r_final"
   mfe_col: "mfe_r"
   mae_col: "mae_r"
@@ -53,6 +53,60 @@ meta:
     - "hit_sl"
     - "p_hat"
     - "risk_profile"
+  train_features:
+    - side
+    - open
+    - high
+    - low
+    - close
+    - atr
+    - atr_pct
+    - rel_vol
+    - imbalance
+    - imbalance_z
+    - shockflip_z
+    - shock_intensity_z
+    - range_atr
+    - donchian_loc
+    - price_flow_div
+    - prior_flow_sign
+    - div_score
+    - trend_dir
+    - trend_aligned
+    - trend_slope
+    - stall_flag
+    - shock_intensity_z_decile
+    - div_score_decile
+    - rel_vol_decile
+  diagnostics_only_features:
+    - mfe6_atr
+    - mfe10_atr
+    - mfe20_atr
+    - mfe30_atr
+    - mfe60_atr
+    - mfe120_atr
+    - mfe240_atr
+    - did_snap_H6_K0_5
+    - did_snap_H6_K0_75
+    - did_snap_H6_K1_0
+    - did_snap_H10_K0_5
+    - did_snap_H10_K0_75
+    - did_snap_H10_K1_0
+    - did_snap_H20_K0_5
+    - did_snap_H20_K0_75
+    - did_snap_H20_K1_0
+    - did_snap_H30_K0_5
+    - did_snap_H30_K0_75
+    - did_snap_H30_K1_0
+    - did_snap_H60_K0_5
+    - did_snap_H60_K0_75
+    - did_snap_H60_K1_0
+    - did_snap_H120_K0_5
+    - did_snap_H120_K0_75
+    - did_snap_H120_K1_0
+    - did_snap_H240_K0_5
+    - did_snap_H240_K0_75
+    - did_snap_H240_K1_0
   max_category_cardinality: 20
 
 paths:
@@ -60,20 +114,22 @@ paths:
 
 # Live ShockFlip geometry aligned with Nov 2025 OOS walkforward
 shockflip:
-  z_band: 1.2
-  jump_band: 1.5
+  # Looser gates to allow more events; model handles routing.
+  z_band: 1.0
+  jump_band: 1.25
   persistence_bars: 1
   z_window: 90
   donchian_window: 40
+  location_require_extreme: false
   min_bars: 60
 
 live:
   # Frozen 2024 BTC meta-model
-  model_path: "results/models/hgb_snap_2024_BTC.joblib"
+  model_path: "results/models/hgb_snap_2024_BTC_agg.joblib"
 
   # If use_ml_routing=false, all ShockFlips are routed with the strategy profile.
   use_ml_routing: true
-  min_p_hat: 0.5
+  min_p_hat: 0.0
 
   # Execution / alerts are configured via the binance:/telegram: blocks below.
 
@@ -107,7 +163,7 @@ telegram:
   chat_id_env: "TELEGRAM_CHAT_ID"
 
   # Noise control
-  send_events: false
+  send_events: true
   send_trade_open: true
   send_trade_close: true
   send_health: true

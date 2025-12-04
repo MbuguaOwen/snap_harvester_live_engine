@@ -20,10 +20,10 @@ def main() -> int:
     parser.add_argument("--config", default="configs/snap_harvester_live_btc.yaml")
     parser.add_argument(
         "--meta",
-        default="results/meta/snap_meta_events_2025_BTC_JanJul.csv",
+        default="results/meta/snap_meta_with_p_hat_2025_BTC_agg.csv",
         help="Path to meta dataset or events with full feature columns",
     )
-    parser.add_argument("--routed", default="results/meta/snap_routed_tape_2025_BTC.csv")
+    parser.add_argument("--routed", default="results/meta/snap_routed_tape_2025_BTC_agg.csv")
     parser.add_argument("--epsilon", type=float, default=1e-6)
     args = parser.parse_args()
 
@@ -63,6 +63,8 @@ def main() -> int:
         merged.rename(columns={"event_id_meta": "event_id"}, inplace=True)
 
     router = LiveRouter(cfg, model_path=cfg["live"]["model_path"])
+    gate = float(cfg.get("live", {}).get("min_p_hat", 0.0))
+    use_ml = bool(cfg.get("live", {}).get("use_ml_routing", False))
 
     # Compute p_hat_live for each row
     p_live = []
@@ -71,15 +73,27 @@ def main() -> int:
         p_live.append(p_hat)
     merged["p_hat_live"] = p_live
 
-    merged["p_diff"] = (merged["p_hat_live"] - merged["p_hat"]).abs()
+    if "p_hat" in merged.columns:
+        p_ref = merged["p_hat"]
+    elif "p_hat_routed" in merged.columns:
+        p_ref = merged["p_hat_routed"]
+    elif "p_hat_meta" in merged.columns:
+        p_ref = merged["p_hat_meta"]
+    else:
+        raise KeyError("No p_hat column found in merged dataframe.")
+
+    merged["p_diff"] = (merged["p_hat_live"] - p_ref).abs()
     max_diff = merged["p_diff"].max()
     mismatches = (merged["p_diff"] > args.epsilon).sum()
-    route_diff = (merged["p_hat_live"] >= 0.5) != (merged["p_hat"] >= 0.5)
+    if use_ml:
+        route_diff = (merged["p_hat_live"] >= gate) != (p_ref >= gate)
+    else:
+        route_diff = pd.Series(False, index=merged.index)
 
     print(f"Rows compared: {len(merged)}")
     print(f"Max |p_hat_live - p_hat|: {max_diff}")
     print(f"p_hat diffs > {args.epsilon}: {mismatches}")
-    print(f"Routing decision mismatches (>=0.5 gate): {route_diff.sum()}")
+    print(f"Routing decision mismatches (>= {gate} gate): {route_diff.sum()}")
 
     return 0 if mismatches == 0 and route_diff.sum() == 0 else 1
 

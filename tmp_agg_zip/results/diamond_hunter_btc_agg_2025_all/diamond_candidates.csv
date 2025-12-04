@@ -1,0 +1,8 @@
+bucket,n,snap_rate,lift
+BASELINE,896,0.0,0.0
+shock_intensity_z >= Decile 8,179,0.0,0.0
+shock_intensity_z >= Decile 9,90,0.0,0.0
+div_score >= Decile 8,179,0.0,0.0
+div_score >= Decile 9,90,0.0,0.0
+rel_vol >= Decile 8,179,0.0,0.0
+rel_vol >= Decile 9,90,0.0,0.0

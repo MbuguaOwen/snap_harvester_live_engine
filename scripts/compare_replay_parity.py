@@ -61,7 +61,7 @@ def compare(live_path: str, research_path: str, epsilon: float) -> Tuple[int, st
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare routed tape parity vs research snapshot.")
     parser.add_argument("--live", default="results/live/replay_routed_tape_2025_BTC.csv")
-    parser.add_argument("--research", default="results/meta/snap_routed_tape_2025_BTC.csv")
+    parser.add_argument("--research", default="results/meta/snap_routed_tape_2025_BTC_agg.csv")
     parser.add_argument("--epsilon", type=float, default=1e-6)
     args = parser.parse_args()
 

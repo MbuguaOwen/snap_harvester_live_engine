@@ -20,9 +20,8 @@ def build_feature_matrix(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
     train_features = meta_cfg.get("train_features", None)
     diagnostics_only = set(meta_cfg.get("diagnostics_only_features", []))
+
     exclude = set(meta_cfg.get("exclude_feature_cols", []))
-    # Never leak diagnostics into the model
-    exclude.update(diagnostics_only)
     exclude.update(
         {
             label_col,
@@ -33,8 +32,11 @@ def build_feature_matrix(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             "p_hat",
         }
     )
+    # Never leak diagnostics into the model
+    exclude.update(diagnostics_only)
 
     if train_features:
+        # Explicit feature whitelist: keep order, fill missing with zeros
         feats = {}
         for col in train_features:
             if col in df.columns:
