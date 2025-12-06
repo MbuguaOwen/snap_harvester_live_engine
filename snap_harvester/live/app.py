@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
+import requests
 
 from snap_harvester.config import load_config
 from snap_harvester.logging_utils import get_logger
@@ -178,6 +179,7 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
     from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient  # type: ignore
 
     symbol = cfg.get("binance", {}).get("symbol", "BTCUSDT")
+    base_url = cfg.get("binance", {}).get("base_url", "https://fapi.binance.com")
 
     # Live ShockFlip geometry aligned with proven Nov 2025 OOS walkforward
     sf_cfg_raw = cfg.get("shockflip", {})
@@ -199,6 +201,13 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
     min_bars = int(sf_cfg_raw.get("min_bars", 60))
 
     detector = ShockFlipDetector(symbol=symbol, cfg=sf_cfg, min_bars=min_bars)
+    _preseed_shockflip(
+        detector=detector,
+        symbol=symbol,
+        base_url=base_url,
+        minutes=max(sf_cfg.z_window, min_bars) + 30,
+        logger=logger,
+    )
     event_feed = ShockFlipEventFeed()
     tick_count = 0
 
@@ -227,6 +236,59 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
     ws.agg_trade(symbol=symbol.lower())
     logger.info("Started ShockFlip detector websocket for %s", symbol)
     return event_feed
+
+
+def _preseed_shockflip(detector: ShockFlipDetector, symbol: str, base_url: str, minutes: int, logger) -> None:
+    """
+    Fetch recent aggTrades and seed the ShockFlip detector so z-window features are hot on launch.
+    """
+    end_ms = int(time.time() * 1000)
+    start_ms = end_ms - minutes * 60 * 1000
+    params = {"symbol": symbol, "limit": 1000, "startTime": start_ms}
+    url = f"{base_url.rstrip('/')}/fapi/v1/aggTrades"
+
+    ticks = []
+    attempts = 0
+    try:
+        while True:
+            attempts += 1
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                break
+
+            last_ts = None
+            for item in data:
+                ts = int(item.get("T") or item.get("E"))
+                if ts is None or ts < start_ms:
+                    continue
+                ticks.append(
+                    {
+                        "ts": pd.to_datetime(ts, unit="ms", utc=True),
+                        "price": float(item["p"]),
+                        "qty": float(item["q"]),
+                        "is_buyer_maker": bool(item["m"]),
+                    }
+                )
+                last_ts = ts if last_ts is None else max(last_ts, ts)
+
+            if last_ts is None or len(data) < params["limit"]:
+                break
+            params["startTime"] = last_ts + 1
+            if attempts > 50:
+                break
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("ShockFlip preseed failed (warmup will be live-only): %s", exc)
+        return
+
+    if not ticks:
+        logger.info("ShockFlip preseed: no ticks fetched; warmup will occur live.")
+        return
+
+    tick_df = pd.DataFrame(ticks)
+    detector.preload_ticks(tick_df)
+    logger.info("ShockFlip preseeded with %d aggTrades (~%d min window)", len(ticks), minutes)
 
 
 def _handle_event(

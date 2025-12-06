@@ -7,7 +7,7 @@ data:
     - "BTCUSDT"
 
   # Historical minutes for replay / warmup (aggTrades v2 bars).
-  bars_path_template: "data/minutes/{symbol}_1min.parquet"
+  bars_path_template: "data/minutes/{symbol}_1min_2025.parquet"
   bars_time_col: "timestamp"
   bars_open_col: "open"
   bars_high_col: "high"
@@ -114,14 +114,14 @@ paths:
 
 # Live ShockFlip geometry aligned with Nov 2025 OOS walkforward
 shockflip:
-  # Looser gates to allow more events; model handles routing.
-  z_band: 1.0
-  jump_band: 1.25
-  persistence_bars: 1
-  z_window: 90
-  donchian_window: 40
-  location_require_extreme: false
-  min_bars: 60
+  # Research-parity geometry (diamond_hunter baseline, aggTrades study).
+  z_band: 2.0
+  jump_band: 2.5
+  persistence_bars: 4
+  z_window: 240
+  donchian_window: 120
+  location_require_extreme: true
+  min_bars: 240
 
 live:
   # Frozen 2024 BTC meta-model
@@ -129,7 +129,7 @@ live:
 
   # If use_ml_routing=false, all ShockFlips are routed with the strategy profile.
   use_ml_routing: true
-  min_p_hat: 0.0
+  min_p_hat: 0.35
 
   # Execution / alerts are configured via the binance:/telegram: blocks below.
 

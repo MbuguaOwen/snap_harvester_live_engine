@@ -55,6 +55,20 @@ class ShockFlipDetector:
         self._last_signal_ts: Optional[int] = None
         self._bars: pd.DataFrame = pd.DataFrame()
 
+    def preload_ticks(self, ticks: pd.DataFrame) -> None:
+        """
+        Seed the detector with historical aggTrades so z-score windows are ready on launch.
+        """
+        if ticks.empty:
+            return
+        bars = resample_ticks_to_bars(ticks, timeframe="1min", symbol=self.symbol)
+        if bars.empty:
+            return
+        self._bars = bars.tail(1000).reset_index(drop=True)
+        # Track the latest minute so live ticks continue cleanly
+        last_ts = pd.to_datetime(self._bars["timestamp"].iloc[-1], utc=True)
+        self._current_minute = int(last_ts.value // 1_000_000 // 60000)
+
     def update(self, tick: Tick) -> Optional[Dict[str, Any]]:
         """
         Ingest one trade tick and emit an event dict when a ShockFlip triggers.
@@ -78,18 +92,24 @@ class ShockFlipDetector:
         if minute == self._current_minute:
             return None
 
-        # Minute rolled: resample all ticks to bars and compute features
+        # Minute rolled: resample buffered ticks to bars and compute features
         self._current_minute = minute
         ticks_df = pd.DataFrame(self._ticks)
+        self._ticks = []  # reset buffer for next minute
         if ticks_df.empty:
             return None
 
-        bars = resample_ticks_to_bars(ticks_df, timeframe="1min", symbol=self.symbol)
-        if bars.empty:
+        new_bars = resample_ticks_to_bars(ticks_df, timeframe="1min", symbol=self.symbol)
+        if new_bars.empty:
             return None
 
-        # Keep a rolling window to limit memory
-        self._bars = bars.tail(1000).reset_index(drop=True)
+        # Append new bars to existing history (including preseed) and keep a rolling window
+        if self._bars is None or self._bars.empty:
+            bars = new_bars
+        else:
+            bars = pd.concat([self._bars, new_bars], ignore_index=True)
+        bars = bars.drop_duplicates(subset=["timestamp"]).tail(1000).reset_index(drop=True)
+        self._bars = bars
 
         # Require a minimum history window before attempting detection
         if len(self._bars) < max(self.min_bars, 1):
