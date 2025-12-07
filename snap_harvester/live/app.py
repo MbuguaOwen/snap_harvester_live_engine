@@ -72,6 +72,8 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
 
     data_cfg = cfg["data"]
     risk_cfg = cfg["risk"]
+    live_cfg = cfg.get("live", {})
+    health_heartbeat_sec = int(live_cfg.get("health_heartbeat_sec", 180))
     events_log_path = Path("results/live/events.csv")
     trades_log_path = Path("results/live/trades.csv")
 
@@ -148,7 +150,7 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
                 )
 
             now = time.time()
-            if now - last_health_ping > 60:
+            if now - last_health_ping > health_heartbeat_sec:
                 try:
                     exec_client.ensure_connection()
                     binance_ok = True

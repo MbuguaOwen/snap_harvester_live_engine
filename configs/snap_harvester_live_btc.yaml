@@ -130,6 +130,9 @@ live:
   # If use_ml_routing=false, all ShockFlips are routed with the strategy profile.
   use_ml_routing: true
   min_p_hat: 0.35
+  # Health heartbeat (HEARTBEAT messages / Telegram), seconds.
+  # Increased from 60s default to reduce notification clustering.
+  health_heartbeat_sec: 3600
 
   # Execution / alerts are configured via the binance:/telegram: blocks below.
 
@@ -146,7 +149,7 @@ binance:
   # Feed / safety
   use_kline_stream: true
   kline_interval: "1m"
-  heartbeat_sec: 30
+  heartbeat_sec: 120
   stale_timeout_sec: 120
   backfill_bars: 240
 

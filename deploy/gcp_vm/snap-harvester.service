@@ -1,0 +1,31 @@
+[Unit]
+Description=Snap Harvester v2 Live Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=snap
+Group=snap
+WorkingDirectory=/opt/snap_harvester_live_engine
+
+# Environment
+EnvironmentFile=/etc/snap_harvester.env
+Environment=PYTHONUNBUFFERED=1
+
+# Command to run your live engine
+ExecStart=/opt/snap_harvester_live_engine/venv/bin/python -m snap_harvester.live.app --config configs/snap_harvester_live_btc.yaml
+
+# Restart behaviour
+Restart=always
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65535
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
