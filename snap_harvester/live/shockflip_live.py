@@ -54,6 +54,9 @@ class ShockFlipDetector:
         self._current_minute: Optional[int] = None
         self._last_signal_ts: Optional[int] = None
         self._bars: pd.DataFrame = pd.DataFrame()
+        self.last_trade_ts: Optional[float] = None  # unix seconds of latest aggTrade
+        self.trades_in_last_sec: int = 0
+        self._last_trade_log_sec: int = 0
 
     def preload_ticks(self, ticks: pd.DataFrame) -> None:
         """

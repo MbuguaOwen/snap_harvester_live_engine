@@ -43,6 +43,7 @@ class BinanceBarFeed:
         self._thread: Optional[threading.Thread] = None
         self._last_bar_time: Optional[pd.Timestamp] = None
         self._last_heartbeat = time.time()
+        self.last_bar_ts: Optional[int] = None  # unix seconds of latest closed bar
         self.feed_stale = False
         self._seen_bars: set[pd.Timestamp] = set()
 
@@ -118,12 +119,21 @@ class BinanceBarFeed:
                 if not kline.get("x"):
                     continue
                 bar_time = pd.to_datetime(kline["t"], unit="ms", utc=True)
+                bar_ts = int(bar_time.timestamp())
+                close_price = float(kline["c"])
+                self.last_bar_ts = bar_ts
+                self._logger.info(
+                    "KLINE_TICK symbol=%s ts=%s close=%.2f",
+                    self.symbol,
+                    bar_ts,
+                    close_price,
+                )
                 bar = Bar(
                     timestamp=bar_time,
                     open=float(kline["o"]),
                     high=float(kline["h"]),
                     low=float(kline["l"]),
-                    close=float(kline["c"]),
+                    close=close_price,
                     volume=float(kline.get("v", 0.0)),
                 )
                 self._enqueue_bar(bar)

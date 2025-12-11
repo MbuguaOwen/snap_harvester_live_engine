@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import queue
 import time
 from datetime import datetime, timezone
@@ -74,15 +75,23 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
     risk_cfg = cfg["risk"]
     live_cfg = cfg.get("live", {})
     health_heartbeat_sec = int(live_cfg.get("health_heartbeat_sec", 180))
+    heartbeat_log_sec = int(live_cfg.get("heartbeat_log_sec", 60))
     events_log_path = Path("results/live/events.csv")
     trades_log_path = Path("results/live/trades.csv")
+    raw_event_count = 0
+    routed_trade_count = 0
+    last_heartbeat_log = 0.0
+    shockflip_detector: ShockFlipDetector | None = None
 
     # Start services
     exec_client.ensure_connection()
     exec_client.flatten_all_positions()
     bar_feed.start()
 
-    event_feed = event_feed or _start_shockflip_pipeline(cfg, logger)
+    if event_feed is None:
+        event_feed, shockflip_detector = _start_shockflip_pipeline(cfg, logger)
+    else:
+        logger.info("Using provided ShockFlip event feed (custom pipeline)")
     safe_pause = False
     last_health_ping = time.time()
     binance_ok = True
@@ -94,7 +103,8 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
             # Handle ShockFlip events if any
             ev = event_feed.get_nowait()
             if ev is not None:
-                _handle_event(
+                raw_event_count += 1
+                routed = _handle_event(
                     event=ev,
                     cfg=cfg,
                     risk_cfg=risk_cfg,
@@ -107,6 +117,8 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
                     safe_pause=safe_pause,
                     max_open_trades=int(cfg.get("binance", {}).get("max_open_trades", 1)),
                 )
+                if routed:
+                    routed_trade_count += 1
 
             # Consume Binance bars
             bar = bar_feed.get_bar(timeout=1.0)
@@ -167,6 +179,24 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
                     },
                 )
                 last_health_ping = now
+
+            if heartbeat_log_sec > 0 and now - last_heartbeat_log >= heartbeat_log_sec:
+                last_heartbeat_log = now
+                bar_ts = bar_feed.last_bar_ts
+                trd_ts = shockflip_detector.last_trade_ts if shockflip_detector else None
+                bar_delta = now - bar_ts if bar_ts is not None else -1
+                trd_delta = now - trd_ts if trd_ts is not None else -1
+                logger.info(
+                    "HEARTBEAT symbol=%s safe_pause=%s "
+                    "last_bar_delta=%.1fs last_aggtrade_delta=%.1fs "
+                    "raw_events=%d routed_trades=%d",
+                    bar_feed.symbol,
+                    safe_pause,
+                    bar_delta,
+                    trd_delta,
+                    raw_event_count,
+                    routed_trade_count,
+                )
     except KeyboardInterrupt:
         logger.info("Shutting down live engine")
     finally:
@@ -174,9 +204,10 @@ def run_live_engine(config_path: str | Path, event_feed: ShockFlipEventFeed | No
     return event_feed
 
 
-def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
+def _start_shockflip_pipeline(cfg: dict, logger) -> tuple[ShockFlipEventFeed, ShockFlipDetector]:
     """
-    Start ShockFlipDetector + Binance aggTrade websocket and return the shared event feed.
+    Start ShockFlipDetector + Binance aggTrade websocket and return the shared event feed
+    plus the detector for monitoring.
     """
     from binance.websocket.um_futures.websocket_client import UMFuturesWebsocketClient  # type: ignore
 
@@ -213,19 +244,41 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
     event_feed = ShockFlipEventFeed()
     tick_count = 0
 
-    def handle_aggtrade(_, msg: Dict[str, Any]) -> None:
+    def handle_aggtrade(_, msg: Any) -> None:
         nonlocal tick_count
         try:
-            tick = Tick(
-                timestamp=int(msg.get("T") or msg.get("E")),
-                price=float(msg["p"]),
-                qty=float(msg["q"]),
-                is_buyer_maker=bool(msg["m"]),
-            )
-        except Exception:
+            if isinstance(msg, str):
+                msg = json.loads(msg)
+            ts_ms = int(msg.get("T") or msg.get("E"))
+            price = float(msg["p"])
+            qty = float(msg["q"])
+            is_buyer_maker = bool(msg["m"])
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("handle_aggtrade parse error: %s msg=%s", exc, msg)
             return
 
+        tick = Tick(
+            timestamp=ts_ms,
+            price=price,
+            qty=qty,
+            is_buyer_maker=is_buyer_maker,
+        )
+
         tick_count += 1
+        ts_sec = ts_ms / 1000.0 if ts_ms is not None else None
+        detector.last_trade_ts = ts_sec
+        detector.trades_in_last_sec += 1
+        now_sec = int(time.time())
+        if now_sec != detector._last_trade_log_sec:
+            detector._last_trade_log_sec = now_sec
+            logger.info(
+                "AGGTRADES_FLOW symbol=%s trades_last_sec=%d last_trade_ts=%s",
+                symbol,
+                detector.trades_in_last_sec,
+                int(ts_sec) if ts_sec is not None else None,
+            )
+            detector.trades_in_last_sec = 0
+
         if tick_count % 100 == 0:
             logger.info("[WS] received %d aggTrades", tick_count)
 
@@ -237,7 +290,7 @@ def _start_shockflip_pipeline(cfg: dict, logger) -> ShockFlipEventFeed:
     ws = UMFuturesWebsocketClient(on_message=handle_aggtrade)
     ws.agg_trade(symbol=symbol.lower())
     logger.info("Started ShockFlip detector websocket for %s", symbol)
-    return event_feed
+    return event_feed, detector
 
 
 def _preseed_shockflip(detector: ShockFlipDetector, symbol: str, base_url: str, minutes: int, logger) -> None:
@@ -305,7 +358,7 @@ def _handle_event(
     events_log_path: Path,
     safe_pause: bool,
     max_open_trades: int,
-) -> None:
+) -> bool:
     logger = get_logger("live_app")
     decision_ts = time.time()
     try:
@@ -322,13 +375,13 @@ def _handle_event(
         _append_csv(events_log_path, rec)
 
         if not should_route:
-            return
+            return False
         if safe_pause:
             logger.warning("SAFE_PAUSE active; skipping new trade")
-            return
+            return False
         if len(trade_engine.open_trades()) >= max_open_trades:
             logger.warning("Max open trades reached (%d); skipping", max_open_trades)
-            return
+            return False
 
         raw_side = event.get("side", 0)
         if isinstance(raw_side, str):
@@ -339,21 +392,21 @@ def _handle_event(
                 side = -1
             else:
                 logger.warning("Invalid side on event: %s", raw_side)
-                return
+                return False
         else:
             try:
                 side = int(raw_side)
             except (TypeError, ValueError):
                 logger.warning("Invalid side on event: %s", raw_side)
-                return
+                return False
 
         if side not in (1, -1):
             logger.warning("Invalid side on event: %s", side)
-            return
+            return False
         atr = float(event["atr"])
         if atr <= 0:
             logger.warning("Invalid ATR on event: %s", atr)
-            return
+            return False
 
         risk_unit = atr * float(risk_cfg["risk_k_atr"])
         sl_dist = risk_unit * float(risk_cfg["sl_r_multiple"])
@@ -416,8 +469,10 @@ def _handle_event(
             trade.entry_price,
             qty,
         )
+        return True
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("Failed to process event: %s", exc)
+        return False
 
 
 if __name__ == "__main__":
