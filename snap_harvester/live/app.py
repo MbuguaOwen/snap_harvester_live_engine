@@ -24,7 +24,7 @@ from .telegram_hud import TelegramHUD
 from .trade_engine import TradeEngine
 
 # ShockFlipConfig comes from the research stack (made importable via shockflip_live.py)
-from core.shockflip_detector import ShockFlipConfig  # type: ignore
+from .shockflip_core import ShockFlipConfig
 
 
 class ShockFlipEventFeed:

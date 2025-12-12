@@ -1,24 +1,18 @@
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-# Make research stack importable. Support both the plain repo name and the
-# current workspace folder name ("shockflip_snap_harvester_v2 - Research").
-ROOT = Path(__file__).resolve().parents[2]
-for candidate in ("shockflip_snap_harvester_v2", "shockflip_snap_harvester_v2 - Research"):
-    research_root = ROOT / candidate
-    if research_root.is_dir() and str(research_root) not in sys.path:
-        sys.path.insert(0, str(research_root))
-
-from core.data_loader import resample_ticks_to_bars  # type: ignore
-from core.features import add_core_features, add_hypothesis_features  # type: ignore
-from core.shockflip_detector import ShockFlipConfig, detect_shockflip_signals  # type: ignore
+from .shockflip_core import (
+    ShockFlipConfig,
+    add_core_features,
+    add_hypothesis_features,
+    detect_shockflip_signals,
+    resample_ticks_to_bars,
+)
 
 
 @dataclass

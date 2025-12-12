@@ -1,0 +1,1 @@
+[2025-12-12 20:34:08] [ERROR] binance_exec: Failed to fetch open orders: orderId is mandatory, but received empty.
